@@ -1,0 +1,20 @@
+{
+  "name": "taskflow-backend",
+  "version": "1.0.0",
+  "description": "REST API backend for TaskFlow — Node.js/Express + PostgreSQL",
+  "main": "src/server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}

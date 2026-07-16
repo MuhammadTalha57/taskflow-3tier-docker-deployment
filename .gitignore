@@ -1,0 +1,22 @@
+# Env files — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+**/node_modules
+
+# Build output
+frontend/dist
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS / editor cruft
+.DS_Store
+.vscode
+.idea
+
+# Docker
+*.pid
