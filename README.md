@@ -5,33 +5,14 @@ Node.js/Express → PostgreSQL**, fully orchestrated with Docker Compose and
 published to Docker Hub. Built as a portfolio piece demonstrating multi-stage
 Docker builds, non-root containers, healthchecks, environment-based config,
 and a clean local-dev → publish → production workflow.
-
 ## Architecture
 
-```
-                        ┌────────────────────────────────────────┐
-                        │            docker network:              │
-                        │            taskflow_net (bridge)         │
-                        │                                          │
-  ┌──────────┐   HTTP   │   ┌───────────┐   HTTP    ┌───────────┐  │
-  │  Browser │ ───────► │   │ frontend  │ ────────► │  backend  │  │
-  │          │  :8080   │   │  (nginx)  │  /api/*   │ (express) │  │
-  └──────────┘          │   └───────────┘  :4000    └─────┬─────┘  │
-                        │                                  │        │
-                        │                                  │ 5432   │
-                        │                            ┌─────▼─────┐  │
-                        │                            │    db     │  │
-                        │                            │ (postgres)│  │
-                        │                            └───────────┘  │
-                        └────────────────────────────────────────┘
-
-  frontend  → serves the built React app + reverse-proxies /api to backend
-  backend   → REST API, connects to Postgres with retry/backoff on startup
-  db        → PostgreSQL 16, data persisted in a named volume
-```
+![TaskFlow 3-tier architecture diagram](docs/architecture-diagram.png)
 
 All three services share a custom bridge network and resolve each other by
-Compose service name (`db`, `backend`, `frontend`) — no hardcoded IPs.
+Compose service name (`db`, `backend`, `frontend`) — no hardcoded IPs. The
+frontend's nginx reverse-proxies `/api/*` to the backend, so the browser
+never talks to the backend directly and no CORS configuration is needed.
 
 ## Tech stack
 
