@@ -114,24 +114,20 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - name: Build & push backend (App Tier)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./backend
           push: true
-          # Comma-separated on one line: v7.4.0 mangled the tags input (dropped the registry); pinned to v6.
-          # See CEA notes I-24.
           tags: ${{ vars.ECR_REGISTRY }}/taskflow-backend:${{ steps.meta.outputs.tag }},${{ vars.ECR_REGISTRY }}/taskflow-backend:latest
           cache-from: type=gha,scope=backend
           cache-to: type=gha,scope=backend,mode=max
 
       - name: Build & push frontend (Web Tier)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           push: true
           build-args: VITE_API_BASE_URL=/api
-          # Comma-separated on one line: v7.4.0 mangled the tags input (dropped the registry); pinned to v6.
-          # See CEA notes I-24.
           tags: ${{ vars.ECR_REGISTRY }}/taskflow-frontend:${{ steps.meta.outputs.tag }},${{ vars.ECR_REGISTRY }}/taskflow-frontend:latest
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
