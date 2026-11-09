@@ -118,9 +118,9 @@ jobs:
         with:
           context: ./backend
           push: true
-          tags: |
-            ${{ vars.ECR_REGISTRY }}/taskflow-backend:${{ steps.meta.outputs.tag }}
-            ${{ vars.ECR_REGISTRY }}/taskflow-backend:latest
+          # Comma-separated on one line: newline-separated lists were mis-parsed by
+          # build-push-action v7.4.0 ("invalid reference format"), see notes I-24.
+          tags: ${{ vars.ECR_REGISTRY }}/taskflow-backend:${{ steps.meta.outputs.tag }},${{ vars.ECR_REGISTRY }}/taskflow-backend:latest
           cache-from: type=gha,scope=backend
           cache-to: type=gha,scope=backend,mode=max
 
@@ -130,9 +130,9 @@ jobs:
           context: ./frontend
           push: true
           build-args: VITE_API_BASE_URL=/api
-          tags: |
-            ${{ vars.ECR_REGISTRY }}/taskflow-frontend:${{ steps.meta.outputs.tag }}
-            ${{ vars.ECR_REGISTRY }}/taskflow-frontend:latest
+          # Comma-separated on one line: newline-separated lists were mis-parsed by
+          # build-push-action v7.4.0 ("invalid reference format"), see notes I-24.
+          tags: ${{ vars.ECR_REGISTRY }}/taskflow-frontend:${{ steps.meta.outputs.tag }},${{ vars.ECR_REGISTRY }}/taskflow-frontend:latest
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
