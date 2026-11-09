@@ -109,6 +109,21 @@ data "aws_iam_openid_connect_provider" "github" {
 
 locals {
   github_oidc_arn = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
+
+  # GitHub puts the repo identity in the token "sub" claim in one of two formats:
+  #   classic   : repo:<owner>/<repo>
+  #   immutable : repo:<owner>@<owner_id>/<repo>@<repo_id>   (newer repos; check with
+  #               gh api repos/<owner>/<repo>/actions/oidc/customization/sub)
+  # and the suffix depends on the job:
+  #   :ref:refs/heads/<branch>   for jobs without an environment (build-and-push)
+  #   :environment:<name>        for jobs that use a GitHub environment (deploy)
+  github_sub_prefixes = compact(["repo:${var.github_repository}", var.github_immutable_sub_prefix])
+  github_allowed_subs = flatten([
+    for p in local.github_sub_prefixes : [
+      "${p}:ref:refs/heads/${var.github_branch}",
+      "${p}:environment:${var.github_environment}",
+    ]
+  ])
 }
 
 data "aws_iam_policy_document" "github_assume" {
@@ -126,7 +141,7 @@ data "aws_iam_policy_document" "github_assume" {
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/${var.github_branch}"]
+      values   = local.github_allowed_subs # exact matches only, no wildcards
     }
   }
 }

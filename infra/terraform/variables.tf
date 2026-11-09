@@ -98,6 +98,18 @@ variable "github_branch" {
   default     = "main"
 }
 
+variable "github_environment" {
+  description = "GitHub environment used by the deploy job (its OIDC sub claim is ...:environment:<name>)."
+  type        = string
+  default     = "production"
+}
+
+variable "github_immutable_sub_prefix" {
+  description = "sub_claim_prefix from `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` when GitHub uses immutable (ID-based) subjects. Empty string to disable."
+  type        = string
+  default     = "repo:MuhammadTalha57@156008107/taskflow-3tier-docker-deployment@1451614613"
+}
+
 variable "create_github_oidc_provider" {
   description = "Set false if the AWS account already has the token.actions.githubusercontent.com OIDC provider."
   type        = bool
