@@ -147,7 +147,7 @@ export default function App() {
       </main>
 
       <footer className="footnote">
-        frontend → backend → postgres · double-click a task to rename it
+        frontend → backend → postgres · deployed on AWS by GitHub Actions · double-click a task to rename it
       </footer>
     </div>
   );
