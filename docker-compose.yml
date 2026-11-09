@@ -1,4 +1,5 @@
-# Production compose file: pulls prebuilt images from Docker Hub.
+# Production-style compose file: pulls prebuilt images from a registry
+# (Docker Hub, GHCR or Amazon ECR — set IMAGE_REGISTRY in .env).
 # No `build:` context here on purpose — this is what you'd run on a server
 # that only has the images, not the source tree.
 #
@@ -29,7 +30,7 @@ services:
       start_period: 10s
 
   backend:
-    image: ${DOCKERHUB_USERNAME}/taskflow-backend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY}/taskflow-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       PORT: 4000
@@ -53,7 +54,7 @@ services:
       start_period: 15s
 
   frontend:
-    image: ${DOCKERHUB_USERNAME}/taskflow-frontend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY}/taskflow-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-8080}:8080"

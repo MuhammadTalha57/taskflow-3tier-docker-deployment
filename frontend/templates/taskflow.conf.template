@@ -1,0 +1,53 @@
+# Rendered at container start by /docker-entrypoint.d/20-envsubst-on-templates.sh
+# Only variables that are defined in the environment are substituted, so
+# nginx's own $host / $remote_addr etc. are left untouched.
+#
+#   BACKEND_UPSTREAM  e.g. http://backend:4000 (compose) or http://<internal-alb-dns> (AWS)
+#   NGINX_RESOLVER    127.0.0.11 (Docker embedded DNS) or 169.254.169.253 (Amazon VPC DNS)
+
+server {
+  # Unprivileged (>1024) port so the master process never needs root.
+  listen 8080;
+  server_name _;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # Re-resolve the backend hostname every 30s. The internal ALB's IPs change
+  # over time, so a hostname resolved once at startup would eventually break.
+  resolver ${NGINX_RESOLVER} valid=30s ipv6=off;
+  resolver_timeout 5s;
+
+  # Basic hardening headers.
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+  # Lightweight liveness probe for the frontend container itself (used by the
+  # Docker HEALTHCHECK and the public ALB target group).
+  location = /healthz {
+    access_log off;
+    add_header Content-Type text/plain;
+    return 200 "ok\n";
+  }
+
+  # Reverse proxy to the Application Tier. Using a variable forces runtime DNS
+  # resolution through the resolver above; the original URI (/api/...) is
+  # passed through unchanged, which is exactly what the backend expects.
+  location /api/ {
+    set $backend_upstream ${BACKEND_UPSTREAM};
+    proxy_pass $backend_upstream;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+  }
+
+  # SPA fallback — any unmatched route serves index.html.
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

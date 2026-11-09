@@ -1,0 +1,203 @@
+# =============================================================================
+# TaskFlow CI/CD:  test  ->  build & push to Amazon ECR  ->  rolling deploy
+#
+#   pull_request to main : test only (nothing is pushed or deployed)
+#   push to main         : test -> build-and-push -> deploy
+#
+# AWS authentication uses GitHub OIDC: the workflow exchanges a short-lived
+# GitHub-signed token for temporary AWS credentials of an IAM role whose trust
+# policy only accepts this repository's main branch. No AWS access keys are
+# stored in GitHub at all.
+#
+# Required repository VARIABLES (Settings -> Secrets and variables -> Actions
+# -> Variables). Values come from `terraform output github_actions_variables`:
+#   AWS_REGION, AWS_ROLE_ARN, ECR_REGISTRY, IMAGE_TAG_PARAM,
+#   WEB_ASG_NAME, APP_ASG_NAME, APP_URL
+# =============================================================================
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege by default; jobs that need more ask for it explicitly.
+permissions:
+  contents: read
+
+# Never run two deployments at the same time (instance refreshes would clash).
+concurrency:
+  group: taskflow-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------- TEST ----
+  test:
+    name: Test (unit + integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Backend - install & unit tests
+        working-directory: backend
+        run: |
+          npm ci
+          npm test
+
+      - name: Frontend - install & production build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Create throw-away .env for the integration stack
+        run: |
+          cp .env.example .env
+          # Random per-run password -> nothing secret is stored in the repo.
+          PW=$(openssl rand -hex 16)
+          sed -i "s/change_me_please/${PW}/g" .env
+          echo "IMAGE_TAG=ci-${GITHUB_SHA::7}" >> .env
+
+      - name: Integration - build images & start 3-tier stack (docker compose)
+        run: docker compose -f docker-compose.dev.yml up -d --build --wait --wait-timeout 180
+
+      - name: Integration - end-to-end smoke test (nginx -> express -> postgres)
+        run: bash scripts/smoke-test.sh http://localhost:8080 120
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.dev.yml logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.dev.yml down -v
+
+  # ---------------------------------------------------- BUILD AND PUSH ----
+  build-and-push:
+    name: Build & push images to ECR
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # required to request the OIDC token
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute immutable image tag from the commit SHA
+        id: meta
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build & push backend (App Tier)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ vars.ECR_REGISTRY }}/taskflow-backend:${{ steps.meta.outputs.tag }}
+            ${{ vars.ECR_REGISTRY }}/taskflow-backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build & push frontend (Web Tier)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          build-args: VITE_API_BASE_URL=/api
+          tags: |
+            ${{ vars.ECR_REGISTRY }}/taskflow-frontend:${{ steps.meta.outputs.tag }}
+            ${{ vars.ECR_REGISTRY }}/taskflow-frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: List pushed images (evidence)
+        run: |
+          for repo in taskflow-backend taskflow-frontend; do
+            aws ecr describe-images --repository-name "$repo" \
+              --query 'sort_by(imageDetails,&imagePushedAt)[-3:].[imageTags[0],imagePushedAt,imageSizeInBytes]' \
+              --output table
+          done
+
+  # -------------------------------------------------------------- DEPLOY ----
+  deploy:
+    name: Rolling deploy to AWS (ASG instance refresh)
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Publish the new image tag (read by instances at boot)
+        run: |
+          aws ssm put-parameter --name "${{ vars.IMAGE_TAG_PARAM }}" \
+            --value "$IMAGE_TAG" --type String --overwrite
+          echo "Deploying image tag: $IMAGE_TAG"
+
+      - name: Start rolling instance refresh (app tier first, then web tier)
+        run: |
+          set -euo pipefail
+          wait_refresh() {
+            local asg="$1" id="$2" deadline=$(( $(date +%s) + 1800 ))
+            while true; do
+              read -r status pct <<<"$(aws autoscaling describe-instance-refreshes \
+                --auto-scaling-group-name "$asg" --instance-refresh-ids "$id" \
+                --query 'InstanceRefreshes[0].[Status,PercentageComplete]' --output text)"
+              echo "$(date +%T)  $asg  status=$status  complete=${pct}%"
+              case "$status" in
+                Successful) return 0 ;;
+                Failed|Cancelled|RollbackSuccessful|RollbackFailed) echo "::error::$asg refresh $status"; return 1 ;;
+              esac
+              [ "$(date +%s)" -ge "$deadline" ] && { echo "::error::timeout waiting for $asg"; return 1; }
+              sleep 20
+            done
+          }
+          for asg in "${{ vars.APP_ASG_NAME }}" "${{ vars.WEB_ASG_NAME }}"; do
+            id=$(aws autoscaling start-instance-refresh --auto-scaling-group-name "$asg" \
+              --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":120}' \
+              --query InstanceRefreshId --output text)
+            echo "Started instance refresh $id on $asg"
+            wait_refresh "$asg" "$id"
+          done
+
+      - name: Post-deploy smoke test against the public load balancer
+        run: bash scripts/smoke-test.sh "${{ vars.APP_URL }}" 300

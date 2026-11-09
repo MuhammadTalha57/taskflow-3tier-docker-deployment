@@ -14,6 +14,30 @@ Compose service name (`db`, `backend`, `frontend`) — no hardcoded IPs. The
 frontend's nginx reverse-proxies `/api/*` to the backend, so the browser
 never talks to the backend directly and no CORS configuration is needed.
 
+## AWS deployment (SE-490 CEA)
+
+This repo also contains a production-style AWS deployment:
+
+| Path | What it is |
+|------|------------|
+| `infra/terraform/` | Terraform (IaC) for the whole AWS stack: VPC (public / private-web / private-app / isolated-db subnets in 2 AZs), IGW, NAT, security-group chain, public + internal ALBs, 2 Auto Scaling Groups (web, app), RDS PostgreSQL 16, ECR, Secrets Manager, SSM, CloudWatch, GitHub OIDC deploy role |
+| `.github/workflows/ci-cd.yml` | GitHub Actions: test → build & push to ECR → rolling deploy (ASG instance refresh) → smoke test |
+| `scripts/smoke-test.sh` | End-to-end API test used locally, in CI and after deploy |
+| `scripts/bootstrap-push-images.sh` | One-time first push of images to ECR |
+| `frontend/templates/taskflow.conf.template` | nginx server block; `BACKEND_UPSTREAM` / `NGINX_RESOLVER` env vars select compose vs. AWS internal ALB |
+| `backend/src/config.js` | `DB_SSL` / `DB_SSL_CA` -> verified TLS to Amazon RDS |
+
+Quick start (details in the CEA notes, `06-aws-deployment-runbook.md`):
+
+```bash
+cd infra/terraform && cp terraform.tfvars.example terraform.tfvars
+terraform init
+terraform apply -target=aws_ecr_repository.repo -target=aws_ssm_parameter.image_tag
+(cd ../.. && bash scripts/bootstrap-push-images.sh ap-south-1)
+terraform apply
+terraform output app_url
+```
+
 ## Tech stack
 
 | Layer         | Technology                                  |

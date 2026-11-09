@@ -1,0 +1,8 @@
+# Force LF line endings for everything that runs on Linux (containers, EC2
+# user-data, CI runners). Without this, Windows checkouts with
+# core.autocrlf=true turn shell scripts into CRLF and they fail with
+# "/bin/bash^M: bad interpreter".
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary

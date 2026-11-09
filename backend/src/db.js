@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { buildSslConfig } from './config.js';
 
 const { Pool } = pg;
 
@@ -10,6 +11,8 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
+  // TLS to the database (on in AWS, off locally) — see config.js
+  ssl: buildSslConfig(),
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

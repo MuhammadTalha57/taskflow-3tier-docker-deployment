@@ -1,0 +1,83 @@
+#!/bin/bash
+# =====================================================================
+# APP TIER bootstrap (EC2 user-data, rendered by Terraform templatefile)
+# Installs Docker and a systemd service that runs the Node/Express
+# container from ECR. DB credentials are fetched from Secrets Manager
+# at start-up - they are never baked into the image or this script.
+# =====================================================================
+set -euxo pipefail
+exec > >(tee -a /var/log/taskflow-bootstrap.log) 2>&1
+
+dnf install -y docker jq
+systemctl enable --now docker
+
+mkdir -p /opt/taskflow/certs
+
+# ---- container launcher (re-run by systemd on every (re)start) ----
+cat > /opt/taskflow/run.sh <<'RUNSH'
+#!/bin/bash
+set -euo pipefail
+REGION="${region}"
+REGISTRY="${ecr_registry}"
+
+TAG=$(aws ssm get-parameter --region "$REGION" --name "${image_tag_param}" --query Parameter.Value --output text)
+IMAGE="$REGISTRY/${image_repo}:$TAG"
+
+IMDS_TOKEN=$(curl -sS -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+INSTANCE_ID=$(curl -sS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+
+# 1) DB credentials from AWS Secrets Manager (allowed only for the app-tier IAM role).
+SECRET=$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "${db_secret_arn}" --query SecretString --output text)
+umask 077   # env file readable by root only
+cat > /opt/taskflow/app.env <<ENVFILE
+DB_HOST=$(echo "$SECRET" | jq -r .host)
+DB_PORT=$(echo "$SECRET" | jq -r .port)
+DB_USER=$(echo "$SECRET" | jq -r .username)
+DB_PASSWORD=$(echo "$SECRET" | jq -r .password)
+DB_NAME=$(echo "$SECRET" | jq -r .dbname)
+DB_SSL=true
+DB_SSL_CA=/certs/rds-ca.pem
+ENVFILE
+umask 022
+
+# 2) Amazon RDS CA bundle so the backend can VERIFY the database's TLS certificate.
+curl -fsSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /opt/taskflow/certs/rds-ca.pem
+chmod 644 /opt/taskflow/certs/rds-ca.pem
+
+# 3) Pull and run the image.
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+docker pull "$IMAGE"
+docker rm -f taskflow 2>/dev/null || true
+
+exec docker run --rm --name taskflow \
+  -p 4000:4000 \
+  --env-file /opt/taskflow/app.env \
+  -v /opt/taskflow/certs:/certs:ro \
+  --log-driver awslogs \
+  --log-opt awslogs-region="$REGION" \
+  --log-opt awslogs-group="${log_group}" \
+  --log-opt awslogs-stream="$INSTANCE_ID" \
+  "$IMAGE"
+RUNSH
+chmod 700 /opt/taskflow/run.sh
+
+cat > /etc/systemd/system/taskflow.service <<'UNIT'
+[Unit]
+Description=TaskFlow app tier container
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+ExecStart=/opt/taskflow/run.sh
+ExecStop=/usr/bin/docker stop taskflow
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now taskflow.service

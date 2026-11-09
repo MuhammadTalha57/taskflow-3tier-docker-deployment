@@ -30,6 +30,16 @@ FROM nginx:1.27.1-alpine AS runtime
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/nginx.conf
+COPY templates /etc/nginx/templates
+
+# Defaults suit docker compose; AWS user-data overrides them at `docker run`.
+#   BACKEND_UPSTREAM -> where /api/* is proxied (Application Tier)
+#   NGINX_RESOLVER   -> DNS server used to (re)resolve BACKEND_UPSTREAM
+ENV BACKEND_UPSTREAM=http://backend:4000     NGINX_RESOLVER=127.0.0.11
+
+# The stock conf.d/default.conf listens on port 80, which a non-root nginx
+# cannot bind; remove it so only our rendered template is loaded.
+RUN rm -f /etc/nginx/conf.d/default.conf
 
 # Non-root: nginx:alpine already provisions an "nginx" user/group.
 # Grant it ownership of everything it needs to write to at runtime.
